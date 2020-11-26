@@ -82,7 +82,8 @@ pub fn new_partial(config: &Configuration) -> Result<sc_service::PartialComponen
 /// Builds a new service for a full client.
 pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 	let sc_service::PartialComponents {
-		client, backend, mut task_manager, import_queue, keystore, select_chain, transaction_pool,
+		client, backend, mut task_manager, import_queue, keystore,
+		select_chain, transaction_pool,
 		inherent_data_providers,
 		other: (block_import, grandpa_link),
 	} = new_partial(&config)?;
@@ -108,6 +109,30 @@ pub fn new_full(config: Configuration) -> Result<TaskManager, ServiceError> {
 			&config, backend.clone(), task_manager.spawn_handle(), client.clone(), network.clone(),
 		);
 	}
+
+	// Need to put this key (Alice's key) into the chain's keystore via RCP -> 	author_insertKey
+	// this needs to be coded into the front end, so that it happends as soon as the frontend is loaded it writes keys to the keystore via API
+	
+	// keyType --> "demo",
+    // suri --> "bottom drive obey lake curtain smoke basket hold race lonely fit walk//Alice",
+    // publicKey --> "0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d"
+
+	// the above content was extracted by the following terminal commands:
+		// node-template: subkey inspect //Alice
+		// Secret Key URI `//Alice` is account:
+		//   Secret seed:      0xe5be9a5092b81bca64be81d212e7f2f9eba183bb7a90954f7b76361f6edb5c0a
+		//   Public key (hex): 0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d
+		//   Account ID:       0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d
+		//   SS58 Address:     5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+		// node-template: subkey inspect "bottom drive obey lake curtain smoke basket hold race lonely fit walk//Alice"
+		// Secret Key URI `bottom drive obey lake curtain smoke basket hold race lonely fit walk//Alice` is account:
+		//   Secret seed:      0xe5be9a5092b81bca64be81d212e7f2f9eba183bb7a90954f7b76361f6edb5c0a
+		//   Public key (hex): 0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d
+		//   Account ID:       0xd43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d
+		//   SS58 Address:     5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+	
+	// review https://substrate.dev/docs/en/tutorials/start-a-private-network/
+
 
 	let role = config.role.clone();
 	let force_authoring = config.force_authoring;
