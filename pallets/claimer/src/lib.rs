@@ -16,6 +16,8 @@ use frame_support::{
 
 use parity_scale_codec::{Decode, Encode};
 
+// use sp_arithmetic;
+
 use frame_system::{
 	self as system, ensure_signed, ensure_none,
 	offchain::{
@@ -54,8 +56,9 @@ pub const KEY_TYPE: KeyTypeId = KeyTypeId(*b"demo");
 pub const NUM_VEC_LEN: usize = 10;
 
 // We are fetching information from github public API about organisation `substrate-developer-hub`.
-pub const HTTP_REMOTE_REQUEST_BYTES: &[u8] = b"https://spencerbh.github.io/sandbox/18102019manualstrip.json";
-pub const HTTP_HEADER_USER_AGENT: &[u8] = b"spencerbh";
+// pub const HTTP_REMOTE_REQUEST_BYTES: &[u8] = b"https://spencerbh.github.io/sandbox/18102019manualstrip.json";
+pub const HTTP_REMOTE_REQUEST_BYTES: &[u8] = b"http://164.90.155.116:8000/apn/chain/";
+//pub const HTTP_HEADER_USER_AGENT: &[u8] = b"spencerbh";
 
 /// Based on the above `KeyTypeId` we need to generate a pallet-specific crypto type wrappers.
 /// We can use from supported crypto kinds (`sr25519`, `ed25519` and `ecdsa`) and augment
@@ -129,7 +132,7 @@ pub struct ApnToken<
 	> {
 	super_apn: u32,
 	agency_name: Vec<u8>,
-	area: u32,
+	//area: u32,
 	//balance: Balance,
 	//annual_allocation: AnnualAllocation<Hash>, // needs to be converted to vector of structs or similar, review substrate kitties for more
 }
@@ -166,7 +169,7 @@ pub struct TaskQueue {
  #[derive(Deserialize, Encode, Decode, Default,Debug)]
  pub struct TaskQueueTwo {
  //	 basin: u32,
-	 apn: u32,
+	 apn: Vec<u8>,
  }
 
 // Specifying serde path as `alt_serde`
@@ -175,10 +178,21 @@ pub struct TaskQueue {
 #[derive(Deserialize, Encode, Decode, Default)]
 struct GithubInfo {
 	// Specify our own deserializing function to convert JSON string to vector of bytes
+	// apn_char: Vec<u8>,
 	apn: u32,
+	// geometry: Vec<u8>,
+	// object_id: u32,
 	#[serde(deserialize_with = "de_string_to_bytes")]
-	agencyname: Vec<u8>,
-	shape_area: u32,
+	agency_name: Vec<u8>,
+	// agency_unique_id: u32,
+	// dwr_revise: Vec<u8>, // is actually null?
+	// region: Vec<u8>,
+	// acres: Vec<u8>, // is actually a float
+	// county: Vec<u8>,
+	// crop2016: Vec<u8>,
+	// id: u32,	
+	// agencyname: Vec<u8>,
+	// shape_area: u32,
 }
 
 pub fn de_string_to_bytes<'de, D>(de: D) -> Result<Vec<u8>, D::Error>
@@ -195,10 +209,10 @@ impl fmt::Debug for GithubInfo {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"{{ apn: {}, agencyname: {}, shape_area: {} }}",
+			"{{ apn: {}, agencyname: {}, shape_area: not included, but we will want to potentially bring acres in to the picture }}",
 			&self.apn,
-			str::from_utf8(&self.agencyname).map_err(|_| fmt::Error)?,
-			&self.shape_area,
+			str::from_utf8(&self.agency_name).map_err(|_| fmt::Error)?,
+			// &self.shape_area,
 		)
 	}
 }
@@ -214,7 +228,7 @@ decl_storage! {
 
 		// Get Apn Tokens from account_id, super_apn
 		pub ApnTokensBySuperApns get(fn super_things_by_super_apns):
-			map hasher(blake2_128_concat) u32 => ApnToken;//<T::Balance>;			
+			map hasher(blake2_128_concat) Vec<u8> => ApnToken;//<T::Balance>;			
 		// not used at the moment
 		NextBasinId get (fn next_basin_id): u32;
 		// Basin map
@@ -230,7 +244,7 @@ decl_storage! {
 		// A bool to track if there is a task in the queue to be fetched via HTTP
 		QueueAvailable get(fn queue_available): bool;
 
-		TaskNumber get(fn task_number): u32;
+		TaskNumber get(fn task_number): Vec<u8>;
 	}
 }
 
@@ -291,14 +305,16 @@ decl_module! {
 		pub fn insert_new_task(origin, 
 			//task_number: u32, 
 			//basin: u32, 
-			apn: u32) -> DispatchResult {
+			apn: Vec<u8>) -> DispatchResult {
 			let _ = ensure_signed(origin)?;
+			let apn_duplicate = apn.clone();
 			let task_queue = TaskQueueTwo {
 				//basin,
 				apn,
 			};
-			let task_number = 1;
-			<TaskQueueByNumber>::insert(task_number, task_queue);
+			// let task_number = apn;
+			<TaskNumber>::put(apn_duplicate);
+			//<TaskQueueByNumber>::insert(task_number, task_queue);
 			QueueAvailable::put(true);
 			Ok(())
 		}
@@ -349,7 +365,7 @@ decl_module! {
 					debug::info!("there is a task in the queue");
 					//QueueAvailable::put(false);
 					debug::info!("the task status is {:?}", Self::queue_available());
-					Self::fetch_if_needed()
+					Self::fetch_if_needed(Self::task_number())
 				//DataAvailable::put(true);
 				} else {
 					debug::info!("executing signed extrinsic");
@@ -368,14 +384,14 @@ impl<T: Trait> Module<T> {
 		let apn_token = ApnToken {
 			super_apn,
 			agency_name,
-			area,
+			//area,
 			//balance: 1337 // this is balance of Acre-feet for the ApnToken, arbitrary number for now
 		};
 
 		// Inserts the ApnToken on-chain, mapping to the basin id and the super_apn
 		//<ApnTokensBySuperApns<T>>::insert((basin_id, super_apn), apn_token); // this is for when we use the balance trait
 		//<ApnTokensBySuperApns<T>>::insert((who, super_apn), apn_token); // for with future ownership
-		<ApnTokensBySuperApns>::insert(super_apn, apn_token);
+		<ApnTokensBySuperApns>::insert(Self::task_number(), apn_token);
 
 		// Emits event
 		Self::deposit_event(RawEvent::NewApnTokenClaimed(basin_id,super_apn));
@@ -385,7 +401,7 @@ impl<T: Trait> Module<T> {
 		/// Check if we have fetched github info before. If yes, we use the cached version that is
 	///   stored in off-chain worker storage `storage`. If no, we fetch the remote info and then
 	///   write the info into the storage for future retrieval.
-	fn fetch_if_needed() -> Result<(), Error<T>> {
+	fn fetch_if_needed(apn: Vec<u8>) -> Result<(), Error<T>> {
 		// Start off by creating a reference to Local Storage value.
 		// Since the local storage is common for all offchain workers, it's a good practice
 		// to prepend our entry with the pallet name.
@@ -431,7 +447,7 @@ impl<T: Trait> Module<T> {
 		//                     we also skip `fetch_n_parse` in this case.
 		//   `Ok(Ok(true))` - successfully acquire the lock, so we run `fetch_n_parse`
 		if let Ok(Ok(true)) = res {
-			match Self::fetch_n_parse() {
+			match Self::fetch_n_parse(apn) {
 				Ok(gh_info) => {
 					// set gh-info into the storage and release the lock
 					s_info.set(&gh_info);
@@ -450,8 +466,8 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// Fetch from remote and deserialize the JSON to a struct
-	fn fetch_n_parse() -> Result<GithubInfo, Error<T>> {
-		let resp_bytes = Self::fetch_from_remote().map_err(|e| {
+	fn fetch_n_parse(apn: Vec<u8>) -> Result<GithubInfo, Error<T>> {
+		let resp_bytes = Self::fetch_from_remote(apn).map_err(|e| {
 			debug::error!("fetch_from_remote error: {:?}", e);
 			<Error<T>>::HttpFetchingError0
 		})?;
@@ -468,17 +484,20 @@ impl<T: Trait> Module<T> {
 
 	/// This function uses the `offchain::http` API to query the remote github information,
 	///   and returns the JSON response as vector of bytes.
-	fn fetch_from_remote() -> Result<Vec<u8>, Error<T>> {
+	fn fetch_from_remote(apn: Vec<u8>) -> Result<Vec<u8>, Error<T>> {
 		// enter github access info - will be replaced with actual database
-		let user_agent_bytes = HTTP_HEADER_USER_AGENT.to_vec();
-		let remote_url_bytes = HTTP_REMOTE_REQUEST_BYTES.to_vec();
+		//let user_agent_bytes = HTTP_HEADER_USER_AGENT.to_vec();
+		let mut remote_url_bytes = HTTP_REMOTE_REQUEST_BYTES.to_vec();
 		//let user_agent = HTTP_HEADER_USER_AGENT.to_vec();
 		// will be used later to ensure data being stored on chain matches the apn entered
-		let task_queue_thing = Self::task_queue_by_number(1);
-		let apn_bytes = task_queue_thing.apn;  
+		// let task_queue_thing = Self::task_queue_by_number(1);
+		// let apn_bytes = task_queue_thing.apn;  
 
-		let user_agent = str::from_utf8(&user_agent_bytes).map_err(|_| <Error<T>>::HttpFetchingError3)?;
-		debug::info!("from the task queue --> {}", user_agent);
+		// let user_agent = str::from_utf8(&user_agent_bytes).map_err(|_| <Error<T>>::HttpFetchingError3)?;
+		// debug::info!("from the task queue --> {}", user_agent);
+		let mut apn_duplicate = apn.clone();
+				
+		remote_url_bytes.append(&mut apn_duplicate);
 
 		let remote_url =
 			str::from_utf8(&remote_url_bytes).map_err(|_| <Error<T>>::HttpFetchingError4)?;
@@ -494,13 +513,13 @@ impl<T: Trait> Module<T> {
 		// For github API request, we also need to specify `user-agent` in http request header.
 		//   See: https://developer.github.com/v3/#user-agent-required
 		let pending = request
-			.add_header(
-				"User-Agent",
-				str::from_utf8(&user_agent_bytes).map_err(|_| <Error<T>>::HttpFetchingError5)?,
-			)
-			.deadline(timeout) // Setting the timeout time
-			.send() // Sending the request out by the host
-			.map_err(|_| <Error<T>>::HttpFetchingError6)?;
+		// 	.add_header(
+		// 		"User-Agent",
+		// 		str::from_utf8(&user_agent_bytes).map_err(|_| <Error<T>>::HttpFetchingError5)?,
+		// 	)
+		 	.deadline(timeout) // Setting the timeout time
+		 	.send() // Sending the request out by the host
+		 	.map_err(|_| <Error<T>>::HttpFetchingError6)?;
 
 		// By default, the http request is async from the runtime perspective. So we are asking the
 		//   runtime to wait here.
@@ -534,8 +553,8 @@ impl<T: Trait> Module<T> {
 			debug::info!("cached gh-info in submit function: {:?}", gh_info.apn);
 			let b_i = 2; // need to remember we have this hardcoded in here, assigning basin_id to arbitrary value of 2
 			let s_a = gh_info.apn;
-			let a_n = gh_info.agencyname;
-			let a_a = gh_info.shape_area;
+			let a_n = gh_info.agency_name;
+			let a_a = 5555;
 
 			let results = signer.send_signed_transaction(|_acct| {
 				Call::submit_apn_signed(b_i, s_a, a_n.clone(), a_a)
@@ -556,6 +575,8 @@ impl<T: Trait> Module<T> {
 					}
 				};
 			}
+		} else {
+			debug::info!{"error 666"};
 		};
 
 		Ok(())
