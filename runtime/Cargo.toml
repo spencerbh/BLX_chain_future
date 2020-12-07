@@ -38,11 +38,13 @@ frame-system-rpc-runtime-api = { default-features = false, version = '2.0.0' }
 pallet-aura = { default-features = false, version = '2.0.0' }
 pallet-balances = { default-features = false, version = '2.0.0' }
 pallet-grandpa = { default-features = false, version = '2.0.0' }
+pallet-proxy = { default-features = false, version = '2.0.0' }
 pallet-randomness-collective-flip = { default-features = false, version = '2.0.0' }
 pallet-sudo = { default-features = false, version = '2.0.0' }
 pallet-timestamp = { default-features = false, version = '2.0.0' }
 pallet-transaction-payment = { default-features = false, version = '2.0.0' }
 pallet-transaction-payment-rpc-runtime-api = { default-features = false, version = '2.0.0' }
+pallet-utility = { default-features = false, version = '2.0.0' }
 sp-api = { default-features = false, version = '2.0.0' }
 sp-block-builder = { default-features = false, version = '2.0.0' }
 sp-consensus-aura = { default-features = false, version = '0.8.0' }
@@ -77,12 +79,14 @@ std = [
     'pallet-aura/std',
     'pallet-balances/std',
     'pallet-grandpa/std',
+    'pallet-proxy/std',
     'pallet-randomness-collective-flip/std',
     'pallet-sudo/std',
     'pallet-template/std',
     'pallet-timestamp/std',
     'pallet-transaction-payment/std',
     'pallet-transaction-payment-rpc-runtime-api/std',
+    'pallet-utility/std',
     'sp-api/std',
     'sp-block-builder/std',
     'sp-consensus-aura/std',
