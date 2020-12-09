@@ -103,6 +103,8 @@ pub trait Trait: balances::Trait + system::Trait + CreateSignedTransaction<Call<
 	type Call: From<Call<Self>>;
 	/// The overarching event type.
 	type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+
+	
 }
 
 // Custom data type
@@ -118,12 +120,6 @@ enum TransactionType {
 
 pub type GroupIndex = u32; // this is Encode (which is necessary for double_map)
 
-#[derive(Encode, Decode, Default, RuntimeDebug)]
-pub struct BasinOwnerId<AccountId> {
-	pub owner: AccountId,
-	pub basin_id: u32,
-}
-
 #[serde(crate = "alt_serde")]
 #[derive(Deserialize, Encode, Decode, Default,Debug)]
 pub struct ApnToken<
@@ -136,11 +132,6 @@ pub struct ApnToken<
 	//balance: Balance,
 	//annual_allocation: AnnualAllocation<Hash>, // needs to be converted to vector of structs or similar, review substrate kitties for more
 }
-
-//type ApnTokenOf<T> = ApnToken<
-	//<T as system::Trait>::Hash, 
-//	<T as balances::Trait>::Balance>;
-
 
 #[derive(Encode, Decode, Clone, Default, RuntimeDebug)]
 pub struct AnnualAllocation<Hash> {
@@ -168,7 +159,6 @@ pub struct TaskQueue {
  #[serde(crate = "alt_serde")]
  #[derive(Deserialize, Encode, Decode, Default,Debug)]
  pub struct TaskQueueTwo {
- //	 basin: u32,
 	 apn: Vec<u8>,
  }
 
@@ -178,21 +168,9 @@ pub struct TaskQueue {
 #[derive(Deserialize, Encode, Decode, Default)]
 struct GithubInfo {
 	// Specify our own deserializing function to convert JSON string to vector of bytes
-	// apn_char: Vec<u8>,
 	apn: u32,
-	// geometry: Vec<u8>,
-	// object_id: u32,
 	#[serde(deserialize_with = "de_string_to_bytes")]
 	agency_name: Vec<u8>,
-	// agency_unique_id: u32,
-	// dwr_revise: Vec<u8>, // is actually null?
-	// region: Vec<u8>,
-	// acres: Vec<u8>, // is actually a float
-	// county: Vec<u8>,
-	// crop2016: Vec<u8>,
-	// id: u32,	
-	// agencyname: Vec<u8>,
-	// shape_area: u32,
 }
 
 pub fn de_string_to_bytes<'de, D>(de: D) -> Result<Vec<u8>, D::Error>
@@ -223,22 +201,8 @@ decl_storage! {
 	trait Store for Module<T: Trait> as Dmap {
 		
 		// Get Apn Tokens from account_id, super_apn
-		//pub ApnTokensBySuperApns get(fn super_things_by_super_apns):
-		//	map hasher(blake2_128_concat) (T::AccountId, u32) => ApnToken;//<T::Balance>;
-
-		// Get Apn Tokens from account_id, super_apn
 		pub ApnTokensBySuperApns get(fn super_things_by_super_apns):
 			map hasher(blake2_128_concat) Vec<u8> => ApnToken;//<T::Balance>;			
-		// not used at the moment
-		NextBasinId get (fn next_basin_id): u32;
-		// Basin map
-		pub Basin get(fn basin): map hasher(blake2_128_concat) u32 => BasinOwnerId<T::AccountId>;
-		// not WORKING, not sure which account's keys are being injected into keystore 
-		// Balance of Apn_Tokens for owner, input is basin_id and AccountId
-		pub BalanceApnTokens get(fn balance_apntokens): map hasher(blake2_128_concat) (u32, T::AccountId) => u32;
-		// For membership, works
-		AllMembers get(fn all_members): Vec<T::AccountId>; 
-		/// A map of TasksQueues to numbers
 		TaskQueueByNumber get(fn task_queue_by_number):
 			map hasher(blake2_128_concat) u32 => TaskQueueTwo;
 		// A bool to track if there is a task in the queue to be fetched via HTTP
@@ -261,14 +225,8 @@ decl_event! (
 		NewNumber(Option<AccountId>, u64),
 		/// New member for `AllMembers` group
 		NewMember(AccountId),
-		/// New ApnToken claimed event includes basin_id, super_apn
-		NewApnTokenClaimed(u32,u32),
-		// fields of the new allocation
-		//NewAnnualAllocation(u32, Hash, Balance),
-		// fields of the apn_token and the annual_allocation fields
-		//NewApnTokenByExistingAnnualAllocation(u32, u32, Hash, Balance),
-		// ""
-		//NewApnTokenByNewAnnualAllocation(u32, u32, Hash, Balance),
+		/// New ApnToken claimed event includes super_apn
+		NewApnTokenClaimed(u32),
 	}
 );
 
@@ -303,18 +261,13 @@ decl_module! {
 		/// Adds a new task to the TaskQueue
 		#[weight = 0]
 		pub fn insert_new_task(origin, 
-			//task_number: u32, 
-			//basin: u32, 
 			apn: Vec<u8>) -> DispatchResult {
 			let _ = ensure_signed(origin)?;
 			let apn_duplicate = apn.clone();
 			let task_queue = TaskQueueTwo {
-				//basin,
 				apn,
 			};
-			// let task_number = apn;
 			<TaskNumber>::put(apn_duplicate);
-			//<TaskQueueByNumber>::insert(task_number, task_queue);
 			QueueAvailable::put(true);
 			Ok(())
 		}
@@ -326,35 +279,17 @@ decl_module! {
 			Ok(())
 		}
 
-		// Create the digital Basin with given no parameters, lol, useless for now
-		#[weight = 10_000]
-		fn create_basin(origin) -> DispatchResult {
-			let member = ensure_signed(origin)?;
-			// Generate next basin ID, 
-			let basin_id = NextBasinId::get().checked_add(1).expect("basin id error");
-			NextBasinId::put(basin_id);
-			// Create new basin,
-			let new_basin = BasinOwnerId {
-				owner: member,
-				basin_id: basin_id,
-			};
-			// Add new basin to map,
-			<Basin<T>>::insert(basin_id, new_basin);
-			Ok(())
-		}
-
-		// Create an ApnToken with given parameters and link to existing basin
+		// Create an ApnToken with given parameters
 		//
-		// @param basin_id used as basin identification
 		// @param super_apn apn used as ID
 		// @param agency_name 
 		// @param area of APN related to ApnToken
 
 		#[weight = 0]
-		pub fn submit_apn_signed(origin, basin_id: u32, super_apn: u32, agency_name: Vec<u8>, area: u32) -> DispatchResult {
+		pub fn submit_apn_signed(origin, super_apn: u32, agency_name: Vec<u8>, area: u32) -> DispatchResult {
 			debug::info!("submit_apn_signed: {:?}", super_apn);
 			let who = ensure_signed(origin)?;
-			Self::update_apn(Some(who), basin_id, super_apn, agency_name, area)
+			Self::update_apn(Some(who), super_apn, agency_name, area)
 		}
 
 		fn offchain_worker(block_number: T::BlockNumber) {
@@ -363,14 +298,11 @@ decl_module! {
 			let result = 
 				if Self::queue_available() == true {
 					debug::info!("there is a task in the queue");
-					//QueueAvailable::put(false);
 					debug::info!("the task status is {:?}", Self::queue_available());
 					Self::fetch_if_needed(Self::task_number())
-				//DataAvailable::put(true);
 				} else {
 					debug::info!("executing signed extrinsic");
 					Self::signed_submit_apn()
-					//if let Err(e) = result { debug::error!("Error: {:?}", e); }
 			};
 		}
 	}
@@ -378,23 +310,19 @@ decl_module! {
 
 
 impl<T: Trait> Module<T> {
-	fn update_apn(who: Option<T::AccountId>, basin_id: u32, super_apn: u32, agency_name: Vec<u8>, area: u32) -> DispatchResult {
-		debug::info!("some info from offchain woah --->  basin {:?} | apn {:?} | agency_name {:?} | area {:?}", basin_id, super_apn, agency_name, area);
+	fn update_apn(who: Option<T::AccountId>, super_apn: u32, agency_name: Vec<u8>, area: u32) -> DispatchResult {
+		debug::info!("some info from offchain woah --->  apn {:?} | agency_name {:?} | area {:?} (not from offchain, hardcoded)", super_apn, agency_name, area);
 		// Create new ApnToken
 		let apn_token = ApnToken {
 			super_apn,
 			agency_name,
-			//area,
-			//balance: 1337 // this is balance of Acre-feet for the ApnToken, arbitrary number for now
 		};
 
-		// Inserts the ApnToken on-chain, mapping to the basin id and the super_apn
-		//<ApnTokensBySuperApns<T>>::insert((basin_id, super_apn), apn_token); // this is for when we use the balance trait
-		//<ApnTokensBySuperApns<T>>::insert((who, super_apn), apn_token); // for with future ownership
+		// Inserts the ApnToken on-chain, mapping  the super_apn
 		<ApnTokensBySuperApns>::insert(Self::task_number(), apn_token);
 
 		// Emits event
-		Self::deposit_event(RawEvent::NewApnTokenClaimed(basin_id,super_apn));
+		Self::deposit_event(RawEvent::NewApnTokenClaimed(super_apn));
 		Ok(())
 	}
 
@@ -486,15 +414,8 @@ impl<T: Trait> Module<T> {
 	///   and returns the JSON response as vector of bytes.
 	fn fetch_from_remote(apn: Vec<u8>) -> Result<Vec<u8>, Error<T>> {
 		// enter github access info - will be replaced with actual database
-		//let user_agent_bytes = HTTP_HEADER_USER_AGENT.to_vec();
 		let mut remote_url_bytes = HTTP_REMOTE_REQUEST_BYTES.to_vec();
-		//let user_agent = HTTP_HEADER_USER_AGENT.to_vec();
-		// will be used later to ensure data being stored on chain matches the apn entered
-		// let task_queue_thing = Self::task_queue_by_number(1);
-		// let apn_bytes = task_queue_thing.apn;  
 
-		// let user_agent = str::from_utf8(&user_agent_bytes).map_err(|_| <Error<T>>::HttpFetchingError3)?;
-		// debug::info!("from the task queue --> {}", user_agent);
 		let mut apn_duplicate = apn.clone();
 				
 		remote_url_bytes.append(&mut apn_duplicate);
@@ -513,10 +434,6 @@ impl<T: Trait> Module<T> {
 		// For github API request, we also need to specify `user-agent` in http request header.
 		//   See: https://developer.github.com/v3/#user-agent-required
 		let pending = request
-		// 	.add_header(
-		// 		"User-Agent",
-		// 		str::from_utf8(&user_agent_bytes).map_err(|_| <Error<T>>::HttpFetchingError5)?,
-		// 	)
 		 	.deadline(timeout) // Setting the timeout time
 		 	.send() // Sending the request out by the host
 		 	.map_err(|_| <Error<T>>::HttpFetchingError6)?;
@@ -551,13 +468,12 @@ impl<T: Trait> Module<T> {
 		if let Some(Some(gh_info)) = s_info.get::<GithubInfo>() {
 			debug::info!("we got to here 0.2");
 			debug::info!("cached gh-info in submit function: {:?}", gh_info.apn);
-			let b_i = 2; // need to remember we have this hardcoded in here, assigning basin_id to arbitrary value of 2
 			let s_a = gh_info.apn;
 			let a_n = gh_info.agency_name;
 			let a_a = 5555;
 
 			let results = signer.send_signed_transaction(|_acct| {
-				Call::submit_apn_signed(b_i, s_a, a_n.clone(), a_a)
+				Call::submit_apn_signed(s_a, a_n.clone(), a_a)
 			});
 			for (acc, res) in &results {
 				match res {
