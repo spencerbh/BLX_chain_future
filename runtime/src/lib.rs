@@ -282,6 +282,16 @@ impl claimer::Trait for Runtime {
 	type AuthorityId = claimer::crypto::TestAuthId;
 	type Call = Call;
 	type Event = Event;
+	type Currency = Balances;
+	type ProxyType = ProxyType;
+	type ProxyDepositBase = ProxyDepositBase;
+	type ProxyDepositFactor = ProxyDepositFactor;
+	type MaxProxies = MaxProxies;
+//	type WeightInfo = pallet_proxy::weights::SubstrateWeight<Runtime>;
+	type MaxPending = MaxPending;
+	type CallHasher = BlakeTwo256;
+	type AnnouncementDepositBase = AnnouncementDepositBase;
+	type AnnouncementDepositFactor = AnnouncementDepositFactor;
 }
 
 pub type SignedPayload = generic::SignedPayload<Call, SignedExtra>;
@@ -325,27 +335,27 @@ impl InstanceFilter<Call> for ProxyType {
 	}
 }
 
-impl pallet_proxy::Trait for Runtime {
-	type Event = Event;
-	type Call = Call;
-	type Currency = Balances;
-	type ProxyType = ProxyType;
-	type ProxyDepositBase = ProxyDepositBase;
-	type ProxyDepositFactor = ProxyDepositFactor;
-	type MaxProxies = MaxProxies;
-	type WeightInfo = ();
-	type MaxPending = MaxPending;
-	type CallHasher = BlakeTwo256;
-	type AnnouncementDepositBase = AnnouncementDepositBase;
-	type AnnouncementDepositFactor = AnnouncementDepositFactor;
-}
+// impl pallet_proxy::Trait for Runtime {
+// 	type Event = Event;
+// 	type Call = Call;
+// 	type Currency = Balances;
+// 	type ProxyType = ProxyType;
+// 	type ProxyDepositBase = ProxyDepositBase;
+// 	type ProxyDepositFactor = ProxyDepositFactor;
+// 	type MaxProxies = MaxProxies;
+// 	type WeightInfo = ();
+// 	type MaxPending = MaxPending;
+// 	type CallHasher = BlakeTwo256;
+// 	type AnnouncementDepositBase = AnnouncementDepositBase;
+// 	type AnnouncementDepositFactor = AnnouncementDepositFactor;
+// }
 
 
-impl pallet_utility::Trait for Runtime {
-	type Event = Event;
-	type Call = Call;
-	type WeightInfo = ();
-}
+// impl pallet_utility::Trait for Runtime {
+// 	type Event = Event;
+// 	type Call = Call;
+// 	type WeightInfo = ();
+// }
 
 
 
@@ -424,8 +434,8 @@ construct_runtime!(
 		// Include the custom logic from the template pallet in the runtime.
 		TemplateModule: pallet_template::{Module, Call, Storage, Event<T>},
 		Claimer: claimer::{Module, Call, Storage, Event<T>},
-		Proxy: pallet_proxy::{Module, Call, Storage, Event<T>},
-		Utility: pallet_utility::{Module, Call, Event},
+		// Proxy: pallet_proxy::{Module, Call, Storage, Event<T>},
+		// Utility: pallet_utility::{Module, Call, Event},
 	}
 );
 
