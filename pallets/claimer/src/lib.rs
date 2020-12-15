@@ -4,16 +4,21 @@
 //! This pallet a stakeholder claiming an ApnToken via parcel number
 //! It is a WIP
 
+use sp_std::prelude::*;
+use primitivesv1::multiaddress::MultiAddress;
+
 use core::{convert::TryInto, fmt};
 use frame_support::{
 	//codec::{Decode, Encode}, // used for on-chain storage
 	decl_event, decl_module, decl_storage, debug, decl_error, // used for all of the different macros
 	dispatch::{DispatchResult, DispatchError},// the returns from a dispatachable call which is a function that a user can call as part of an extrensic
 	ensure, // used to verify things
+	// RuntimeDebug,
 	storage::{StorageDoubleMap, StorageMap, StorageValue}, // storage types used
 	traits::{
 		Get, // no idea
 		ReservableCurrency, Currency, InstanceFilter, OriginTrait, IsType, 
+		EnsureOrigin, OnUnbalanced, WithdrawReason, ExistenceRequirement::KeepAlive, Imbalance,
 		//IsSubType, //cant find this?
 	},
 	Parameter,
@@ -21,7 +26,7 @@ use frame_support::{
 	weights::{Weight, GetDispatchInfo},
 };
 
-use parity_scale_codec::{Decode, Encode};
+use parity_scale_codec::{Codec, Decode, Encode};
 
 // use sp_arithmetic;
 
@@ -31,7 +36,7 @@ use frame_system::{
 		AppCrypto, CreateSignedTransaction, SendSignedTransaction, Signer, SubmitTransaction,
 	},
 };
-use sp_runtime::{RuntimeDebug, traits::{Dispatchable, Zero, Hash, Member, Saturating}};
+pub use sp_runtime::{RuntimeDebug, traits::{Dispatchable, Zero, Hash, Member, Saturating, LookupError, StaticLookup}};
 use sp_std::prelude::*; // imports a bunch of boiler plate
 
 use sp_std::str; // string
@@ -102,13 +107,17 @@ pub mod crypto {
 //pub use weights::WeightInfo;
 
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
+type NegativeImbalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::NegativeImbalance;
 
-
+pub trait WeightInfo {}
+impl WeightInfo for () {}
 /////////////////////////////////////////////////////////////////////////////////// //////////////
  
  
 /// This is the pallet's configuration trait
 pub trait Trait: balances::Trait + system::Trait + CreateSignedTransaction<Call<Self>> {
+	/// An optional `AccountIndex` type for backwards compatibility.
+	type AccountIndex: Parameter + Member + Codec + Default + Copy;
 
 	/// The currency mechanism.
 	type Currency: ReservableCurrency<Self::AccountId>;
@@ -165,6 +174,12 @@ pub trait Trait: balances::Trait + system::Trait + CreateSignedTransaction<Call<
 	/// This is held for adding an `AccountId`, `Hash` and `BlockNumber` (typically 68 bytes)
 	/// into a pre-existing storage value.
 	type AnnouncementDepositFactor: Get<BalanceOf<Self>>;
+
+		/// Configuration for ownership extensions of a name.
+		type ExtensionConfig: Get<ExtensionConfig<Self::BlockNumber, BalanceOf<Self>>>;
+
+		/// Weight information for extrinsics in this pallet.
+		type WeightInfo: WeightInfo;
 }
 
 // Custom data type
@@ -176,9 +191,18 @@ enum TransactionType {
 	None,
 }
 
+#[derive(Default, RuntimeDebug)]
+pub struct ExtensionConfig<BlockNumber, Balance> {
+	pub enabled: bool,
+	pub extension_period: BlockNumber,
+	pub extension_fee: Balance,
+}
+
 /////////////////////////////////////////////////////////////////////////////////////////////////
 
 pub type GroupIndex = u32; // this is Encode (which is necessary for double_map)
+
+type Name = [u8; 32];
 
 #[serde(crate = "alt_serde")]
 #[derive(Deserialize, Encode, Decode, Default,Debug)]
@@ -292,6 +316,10 @@ decl_storage! {
 		/// The announcements made by the proxy (key).
 		pub Announcements get(fn announcements): map hasher(twox_64_concat) T::AccountId
 			=> (Vec<Announcement<T::AccountId, CallHashOf<T>, T::BlockNumber>>, BalanceOf<T>);
+
+		/// The lookup from name to account.
+		pub Lookup: map hasher(blake2_128_concat) Name => Option<T::AccountId>;
+
 	}
 }
 
@@ -305,6 +333,8 @@ decl_event! (
 		AccountId = <T as system::Trait>::AccountId,
 		ProxyType = <T as Trait>::ProxyType,
 		Hash = CallHashOf<T>,
+		<T as frame_system::Trait>::BlockNumber,
+		Balance = BalanceOf<T>,
 	{
 		/// Event generated when a new number is accepted to contribute to the average.
 		NewNumber(Option<AccountId>, u64),
@@ -320,6 +350,13 @@ decl_event! (
 		AnonymousCreated(AccountId, AccountId, ProxyType, u16),
 		/// An announcement was placed to make a call in the future. \[real, proxy, call_hash\]
 		Announced(AccountId, AccountId, Hash),
+
+		BidPlaced(Name, AccountId, Balance, BlockNumber),
+		NameClaimed(Name, AccountId, BlockNumber),
+		NameFreed(Name),
+		NameSet(Name),
+		NameAssigned(Name, AccountId),
+		NameUnassigned(Name),
 	}
 );
 
@@ -356,6 +393,29 @@ decl_error! {
 		NoPermission,
 		/// Announcement, if made at all, was made too recently.
 		Unannounced,
+		/// The current state of the name does not match this step in the state machine.
+		UnexpectedState,
+		/// The name provided does not follow the configured rules.
+		InvalidName,
+		/// The bid is invalid.
+		InvalidBid,
+		/// The claim is invalid.
+		InvalidClaim,
+		/// User is not the current bidder.
+		NotBidder,
+		/// The name has not expired in bidding or ownership.
+		NotExpired,
+		/// The name is already available.
+		AlreadyAvailable,
+		/// The name is permanent.
+		Permanent,
+		/// You are not the owner of this name.
+		NotOwner,
+		/// You are not assigned to this domain.
+		NotAssigned,
+		/// Ownership extensions are not available.
+		NoExtensions,
+		Lalala,
 	}
 }
 
@@ -385,31 +445,6 @@ decl_module! {
 		/// `AnnouncementDepositFactor` metadata shadow.
 		const AnnouncementDepositFactor: BalanceOf<T> = T::AnnouncementDepositFactor::get();
 
-
-		/// Dispatch the given `call` from an account that the sender is authorised for through
-		/// `add_proxy`.
-		///
-		/// Removes any corresponding announcement(s).
-		///
-		/// The dispatch origin for this call must be _Signed_.
-		///
-		/// Parameters:
-		/// - `real`: The account that the proxy will make a call on behalf of.
-		/// - `force_proxy_type`: Specify the exact proxy type to be used and checked for this call.
-		/// - `call`: The call to be made by the `real` account.
-		// #[weight = 0]
-		// fn proxy(origin,
-		// 	real: T::AccountId,
-		// 	force_proxy_type: Option<T::ProxyType>,
-		// 	call: Box<<T as Trait>::Call>,
-		// ) {
-		// 	let who = ensure_signed(origin)?;
-		// 	let def = Self::find_proxy(&real, &who, force_proxy_type)?;
-		// 	ensure!(def.delay.is_zero(), Error::<T>::Unannounced);
-
-		// 	Self::do_proxy(def, real, *call);
-		// }
-
 		/// Register a proxy account for the sender that is able to make calls on its behalf.
 		///
 		/// The dispatch origin for this call must be _Signed_.
@@ -427,38 +462,7 @@ decl_module! {
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 			Self::add_proxy_delegate(&who, delegate, proxy_type, delay)
-		}
-
-		/// Unregister a proxy account for the sender.
-		///
-		/// The dispatch origin for this call must be _Signed_.
-		///
-		/// Parameters:
-		/// - `proxy`: The account that the `caller` would like to remove as a proxy.
-		/// - `proxy_type`: The permissions currently enabled for the removed proxy account.
-		// #[weight = 0]
-		// fn remove_proxy(origin,
-		// 	delegate: T::AccountId,
-		// 	proxy_type: T::ProxyType,
-		// 	delay: T::BlockNumber,
-		// ) -> DispatchResult {
-		// 	let who = ensure_signed(origin)?;
-		// 	Self::remove_proxy_delegate(&who, delegate, proxy_type, delay)
-		// }		
-
-
-		/// Unregister all proxy accounts for the sender.
-		///
-		/// The dispatch origin for this call must be _Signed_.
-		///
-		/// WARNING: This may be called on accounts created by `anonymous`, however if done, then
-		/// the unreserved fees will be inaccessible. **All access to this account will be lost.**
-		// #[weight = 0]
-		// fn remove_proxies(origin) {
-		// 	let who = ensure_signed(origin)?;
-		// 	let (_, old_deposit) = Proxies::<T>::take(&who);
-		// 	T::Currency::unreserve(&who, old_deposit);
-		// }		
+		}	
 
 		/// Spawn a fresh new account that is guaranteed to be otherwise inaccessible, and
 		/// initialize it with a proxy of `proxy_type` for `origin` sender.
@@ -496,119 +500,6 @@ decl_module! {
 			Proxies::<T>::insert(&anonymous, (vec![proxy_def], deposit));
 			Self::deposit_event(RawEvent::AnonymousCreated(anonymous, who, proxy_type, index));
 		}
-
-
-		/// Removes a previously spawned anonymous proxy.
-		///
-		/// WARNING: **All access to this account will be lost.** Any funds held in it will be
-		/// inaccessible.
-		///
-		/// Requires a `Signed` origin, and the sender account must have been created by a call to
-		/// `anonymous` with corresponding parameters.
-		///
-		/// - `spawner`: The account that originally called `anonymous` to create this account.
-		/// - `index`: The disambiguation index originally passed to `anonymous`. Probably `0`.
-		/// - `proxy_type`: The proxy type originally passed to `anonymous`.
-		/// - `height`: The height of the chain when the call to `anonymous` was processed.
-		/// - `ext_index`: The extrinsic index in which the call to `anonymous` was processed.
-		///
-		/// Fails with `NoPermission` in case the caller is not a previously created anonymous
-		/// account whose `anonymous` call has corresponding parameters.
-		///
-		// #[weight = 0]
-		// fn kill_anonymous(origin,
-		// 	spawner: T::AccountId,
-		// 	proxy_type: T::ProxyType,
-		// 	index: u16,
-		// 	#[compact] height: T::BlockNumber,
-		// 	#[compact] ext_index: u32,
-		// ) {
-		// 	let who = ensure_signed(origin)?;
-
-		// 	let when = (height, ext_index);
-		// 	let proxy = Self::anonymous_account(&spawner, &proxy_type, index, Some(when));
-		// 	ensure!(proxy == who, Error::<T>::NoPermission);
-
-		// 	let (_, deposit) = Proxies::<T>::take(&who);
-		// 	T::Currency::unreserve(&spawner, deposit);
-		// }
-
-		/// Publish the hash of a proxy-call that will be made in the future.
-		///
-		/// This must be called some number of blocks before the corresponding `proxy` is attempted
-		/// if the delay associated with the proxy relationship is greater than zero.
-		///
-		/// No more than `MaxPending` announcements may be made at any one time.
-		///
-		/// This will take a deposit of `AnnouncementDepositFactor` as well as
-		/// `AnnouncementDepositBase` if there are no other pending announcements.
-		///
-		/// The dispatch origin for this call must be _Signed_ and a proxy of `real`.
-		///
-		/// Parameters:
-		/// - `real`: The account that the proxy will make a call on behalf of.
-		/// - `call_hash`: The hash of the call to be made by the `real` account.
-		///
-		// #[weight = 0]
-		// fn announce(origin, real: T::AccountId, call_hash: CallHashOf<T>) {
-		// 	let who = ensure_signed(origin)?;
-		// 	Proxies::<T>::get(&real).0.into_iter()
-		// 		.find(|x| &x.delegate == &who)
-		// 		.ok_or(Error::<T>::NotProxy)?;
-
-		// 	let announcement = Announcement {
-		// 		real: real.clone(),
-		// 		call_hash: call_hash.clone(),
-		// 		height: system::Module::<T>::block_number(),
-		// 	};
-
-		// 	Announcements::<T>::try_mutate(&who, |(ref mut pending, ref mut deposit)| {
-		// 		ensure!(pending.len() < T::MaxPending::get() as usize, Error::<T>::TooMany);
-		// 		pending.push(announcement);
-		// 		Self::rejig_deposit(
-		// 			&who,
-		// 			*deposit,
-		// 			T::AnnouncementDepositBase::get(),
-		// 			T::AnnouncementDepositFactor::get(),
-		// 			pending.len(),
-		// 		).map(|d| d.expect("Just pushed; pending.len() > 0; rejig_deposit returns Some; qed"))
-		// 		.map(|d| *deposit = d)
-		// 	})?;
-		// 	Self::deposit_event(RawEvent::Announced(real, who, call_hash));
-		// }
-
-		/// Remove a given announcement.
-		///
-		/// May be called by a proxy account to remove a call they previously announced and return
-		/// the deposit.
-		///
-		/// The dispatch origin for this call must be _Signed_.
-		///
-		/// Parameters:
-		/// - `real`: The account that the proxy will make a call on behalf of.
-		/// - `call_hash`: The hash of the call to be made by the `real` account.
-		///
-		// #[weight = 0]
-		// fn remove_announcement(origin, real: T::AccountId, call_hash: CallHashOf<T>) {
-		// 	let who = ensure_signed(origin)?;
-		// 	Self::edit_announcements(&who, |ann| ann.real != real || ann.call_hash != call_hash)?;
-		// }
-
-		/// Remove the given announcement of a delegate.
-		///
-		/// May be called by a target (proxied) account to remove a call that one of their delegates
-		/// (`delegate`) has announced they want to execute. The deposit is returned.
-		///
-		/// The dispatch origin for this call must be _Signed_.
-		///
-		/// Parameters:
-		/// - `delegate`: The account that previously announced the call.
-		/// - `call_hash`: The hash of the call to be made.
-		// #[weight = 0]
-		// fn reject_announcement(origin, delegate: T::AccountId, call_hash: CallHashOf<T>) {
-		// 	let who = ensure_signed(origin)?;
-		// 	Self::edit_announcements(&delegate, |ann| ann.real != who || ann.call_hash != call_hash)?;
-		// }
 
 		/// Dispatch the given `call` from an account that the sender is authorised for through
 		/// `add_proxy`.
@@ -674,6 +565,26 @@ decl_module! {
 			Self::update_apn(Some(who), super_apn, agency_name, area)
 		}
 
+
+		#[weight = 0]
+		fn set_name(origin, name: Name, 
+			//state: NameStatus<T::AccountId, 
+			//T::BlockNumber, BalanceOf<T>>
+		)  {
+			let who = ensure_signed(origin)?;
+			// T::ManagerOrigin::ensure_origin(origin)?;
+			// // TODO: Make safer with regards to setting or removing `Bidding` state.
+			Lookup::<T>::insert(&name, who.clone());
+			Self::deposit_event(RawEvent::NameSet(name));
+		}
+
+		// #[weight = 0]
+		// pub fn apn_account_creation_action(origin){
+		// 	debug::info!("creating apn proxy account...");
+		// 	let who = ensure_signed(origin)?;
+		// 	Self::signed_account_apn(&who)
+		// }
+
 		fn offchain_worker(block_number: T::BlockNumber) {
 			debug::info!("Entering off-chain workers");
 
@@ -682,7 +593,9 @@ decl_module! {
 					debug::info!("there is a task in the queue");
 					debug::info!("the task status is {:?}", Self::queue_available());
 					Self::fetch_if_needed(Self::task_number())
-				} else {
+				} 
+				else 
+				{
 					debug::info!("executing signed extrinsic");
 					Self::signed_submit_apn()
 			};
@@ -692,6 +605,13 @@ decl_module! {
 
 
 impl<T: Trait> Module<T> {
+
+	// fn signed_account_apn(who: &T::AccountId) {
+	// 	let blocknumb: T::BlockNumber = 0.into();
+	// 	//<frame_system::Module<T>>::block_number();
+
+	// 	Self::anonymous(&who, T::ProxyType::default(), blocknumb, 0);
+	// }
 
 	/// Calculate the address of an anonymous account.
 	///
@@ -769,7 +689,7 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-		/// Check if we have fetched github info before. If yes, we use the cached version that is
+	/// Check if we have fetched github info before. If yes, we use the cached version that is
 	///   stored in off-chain worker storage `storage`. If no, we fetch the remote info and then
 	///   write the info into the storage for future retrieval.
 	fn fetch_if_needed(apn: Vec<u8>) -> Result<(), Error<T>> {
@@ -899,6 +819,50 @@ impl<T: Trait> Module<T> {
 		Ok(response.body().collect::<Vec<u8>>())
 	}
 
+	// fn account_namer() -> Result<(), Error<T>> {
+	// 	let signer = Signer::<T, T::AuthorityId>::all_accounts();
+	// 	if !signer.can_sign() {
+	// 		debug::error!("No local account available -- boi"); // HELP HERE
+	// 		return Err(<Error<T>>::SignedSubmitNumberError);
+	// 	}
+	// 	let s_info = StorageValueRef::persistent(b"offchain-demo::gh-info");
+	// 	debug::info!("we got to here 0.1");
+
+	// 	if let Some(Some(gh_info)) = s_info.get::<GithubInfo>() {
+	// 		debug::info!("we got to here 0.2");
+	// 		debug::info!("cached gh-info in submit function: {:?}", gh_info.apn);
+	// 		let s_a = gh_info.apn;
+	// 		let a_n = gh_info.agency_name;
+	// 		let a_a = 5555;
+
+	// 		let results = signer.send_signed_transaction(|_acct| {
+	// 			Call::submit_apn_signed(s_a, a_n.clone(), a_a)
+	// 		});
+
+	// 		for (acc, res) in &results {
+	// 			match res {
+	// 				Ok(()) => {
+	// 					debug::native::info!(
+	// 						"off-chain send_signed: acc: {:?}| apn: {:#?}",
+	// 						acc.id,
+	// 						s_a.clone()
+	// 					);
+	// 				}
+	// 				Err(e) => {
+	// 					//debug::error!("[{:?}] Failed in signed_submit_number: {:?}", acc.id, e);
+	// 					debug::error!("[{:?}] Failed in signed_submit_number", acc.id);
+	// 					return Err(<Error<T>>::SignedSubmitNumberError);
+	// 				}
+	// 			};
+	// 		}
+	// 	} else {
+	// 		debug::info!{"error 666"};
+	// 	};
+	// 	Ok(())
+
+	// }
+
+
 	fn signed_submit_apn() -> Result<(), Error<T>> {
 		let signer = Signer::<T, T::AuthorityId>::all_accounts();
 		if !signer.can_sign() {
@@ -918,6 +882,7 @@ impl<T: Trait> Module<T> {
 			let results = signer.send_signed_transaction(|_acct| {
 				Call::submit_apn_signed(s_a, a_n.clone(), a_a)
 			});
+
 			for (acc, res) in &results {
 				match res {
 					Ok(()) => {
@@ -975,5 +940,27 @@ impl<T: Trait> Module<T> {
 		});
 		let e = call.dispatch(origin);
 		Self::deposit_event(RawEvent::ProxyExecuted(e.map(|_| ()).map_err(|e| e.error)));
+	}
+}
+
+impl<T: Trait> StaticLookup for Module<T>
+where
+	MultiAddress<T::AccountId, T::AccountIndex>: Codec,
+{
+	type Source = MultiAddress<T::AccountId, T::AccountIndex>;
+	type Target = T::AccountId;
+
+	fn lookup(a: Self::Source) -> Result<Self::Target, LookupError> {
+		match a {
+			MultiAddress::Id(id) => Ok(id), // attempts to match on AccountId
+			MultiAddress::Address32(hash) => { // attempts to match on friendly name (Address32)
+				Lookup::<T>::get(hash).ok_or(LookupError)
+			},
+			_ => Err(LookupError),
+		}
+	}
+
+	fn unlookup(a: Self::Target) -> Self::Source {
+		MultiAddress::Id(a)
 	}
 }

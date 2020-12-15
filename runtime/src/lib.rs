@@ -17,7 +17,7 @@ use sp_runtime::{
 };
 use sp_runtime::traits::{
 	BlakeTwo256, Block as BlockT, IdentityLookup, Verify, IdentifyAccount, NumberFor, Saturating,
-	SaturatedConversion,
+	SaturatedConversion, LookupError, StaticLookup, Member
 };
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
@@ -26,7 +26,8 @@ use pallet_grandpa::fg_primitives;
 use sp_version::RuntimeVersion;
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
-
+use frame_system::EnsureSignedBy;
+pub use claimer::ExtensionConfig;
 // A few exports that help ease life for downstream crates.
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -34,7 +35,8 @@ pub use pallet_timestamp::Call as TimestampCall;
 pub use pallet_balances::Call as BalancesCall;
 pub use sp_runtime::{Permill, Perbill};
 pub use frame_support::{
-	construct_runtime, parameter_types, StorageValue, debug, RuntimeDebug,
+	construct_runtime, parameter_types, StorageValue, debug, RuntimeDebug, ord_parameter_types, impl_outer_origin,
+	impl_outer_event,
 	traits::{KeyOwnerProofSystem, Randomness, InstanceFilter},
 	weights::{
 		Weight, IdentityFee,
@@ -279,6 +281,7 @@ impl pallet_template::Trait for Runtime {
 }
 
 impl claimer::Trait for Runtime {
+	type AccountIndex = AccountIndex;
 	type AuthorityId = claimer::crypto::TestAuthId;
 	type Call = Call;
 	type Event = Event;
@@ -292,6 +295,8 @@ impl claimer::Trait for Runtime {
 	type CallHasher = BlakeTwo256;
 	type AnnouncementDepositBase = AnnouncementDepositBase;
 	type AnnouncementDepositFactor = AnnouncementDepositFactor;
+	type ExtensionConfig = ExtensionsOn;
+	type WeightInfo = ();
 }
 
 pub type SignedPayload = generic::SignedPayload<Call, SignedExtra>;
@@ -335,6 +340,27 @@ impl InstanceFilter<Call> for ProxyType {
 	}
 }
 
+parameter_types! {
+	pub const BiddingPeriod: BlockNumber = 10;
+	pub const ClaimPeriod: BlockNumber = 5;
+	pub const OwnershipPeriod: BlockNumber = 100;
+	pub const MinBid: Balance = 5;
+	pub ExtensionsOn: ExtensionConfig<BlockNumber, Balance> = ExtensionConfig {
+		enabled: true,
+		extension_period: 100,
+		extension_fee: 5,
+	};
+}
+ord_parameter_types! {
+	pub const Manager: u64 = 100;
+	pub const Permanence: u64 = 200;
+}
+
+impl loose_lookup::Trait for Runtime {
+	// type Event = Event;
+	type Lookie = Claimer;
+	type AccountIndex = AccountIndex;
+}
 // impl pallet_proxy::Trait for Runtime {
 // 	type Event = Event;
 // 	type Call = Call;
@@ -434,6 +460,8 @@ construct_runtime!(
 		// Include the custom logic from the template pallet in the runtime.
 		TemplateModule: pallet_template::{Module, Call, Storage, Event<T>},
 		Claimer: claimer::{Module, Call, Storage, Event<T>},
+		//NameService: name_service::{Module, Call, Storage, Event<T>},
+		LooseLookup: loose_lookup::{Module, Call, Storage},
 		// Proxy: pallet_proxy::{Module, Call, Storage, Event<T>},
 		// Utility: pallet_utility::{Module, Call, Event},
 	}
