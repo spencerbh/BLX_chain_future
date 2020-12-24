@@ -501,6 +501,47 @@ decl_module! {
 			Self::deposit_event(RawEvent::AnonymousCreated(anonymous, who, proxy_type, index));
 		}
 
+		// / Spawn a new anonymous/pure proxy account for a user and rename it with Assessor's Parcel Number provided
+		// /
+		// / requires `signed` origin
+		// /
+		// / - `proxy_type`: The type of proxy that the snder will be registered as over the new account. 
+		// / This will almost always be the most permissive `ProxyType` possible to allow for maximum flexibility.
+		// / - `index`: A disambiguation index, in case this is called multiple times in the same
+		// / transaction (e.g. with `utility::batch`). Unless you're using `batch` you probably just
+		// / want to use `0`. May be useful for approving mulitple APNs at once
+		// / - `delay`: The announcement period required of the initial proxy. Will generally be
+		// / zero.
+		// / - `APN`: The Vec<u8> to be utilized in renaming the proxy, will be converted to `Address32`.
+		// / 
+		// /
+		// / Fails with `Duplicate` if this has already been called in this transaction, from the
+		// / same sender, with the same parameters.
+		// /
+		// / Fails if there are insufficient funds to pay for deposit.
+		// /	
+		#[weight = 0]
+		pub fn create_APNAccount(origin, proxy_type: T::ProxyType, delay: T::BlockNumber, index: u16, APN: [u8; 32]) {
+			let who = ensure_signed(origin)?;
+
+			let anonymous = Self::anonymous_account(&who, &proxy_type, index, None);
+			ensure!(!Proxies::<T>::contains_key(&anonymous), Error::<T>::Duplicate);
+			let deposit = T::ProxyDepositBase::get() + T::ProxyDepositFactor::get();
+			T::Currency::reserve(&who, deposit)?;
+			let proxy_def = ProxyDefinition {
+				delegate: who.clone(),
+				proxy_type: proxy_type.clone(),
+				delay,
+			};
+			Proxies::<T>::insert(&anonymous, (vec![proxy_def], deposit));
+			Self::deposit_event(RawEvent::AnonymousCreated(anonymous.clone(), who, proxy_type, index));
+
+			//Self::do_proxy(def, real, *call)
+
+			Lookup::<T>::insert(&APN, anonymous.clone());
+			Self::deposit_event(RawEvent::NameSet(APN))
+		}
+
 		/// Dispatch the given `call` from an account that the sender is authorised for through
 		/// `add_proxy`.
 		///
