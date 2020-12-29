@@ -15,10 +15,14 @@ use frame_system::ensure_signed;
 use codec::{Encode, Decode};
 use claimer::StaticLookup;
 
+type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
+
+
 pub trait Trait: frame_system::Trait {
 	// type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 	type AccountIndex: frame_support::Parameter + sp_runtime::traits::Member + codec::Codec + Default + sp_runtime::traits::AtLeast32Bit + Copy;
 	type Lookie: StaticLookup <Target = Self::AccountId> + StaticLookup <Source = MultiAddress<Self::AccountId, Self::AccountIndex>> ;  
+	type Currency: ReservableCurrency<Self::AccountId>;
 }
 
 // decl_event!(
@@ -72,6 +76,19 @@ decl_module! {
 
             // debug::info!("this account's name is: {:?}", name);
 			//ensure!(caller == name, Error::<T>::LookupErrorororor);
+
+			Ok(())
+		}
+
+		#[weight = 0]
+		fn allocate_ACFT(origin, BasinAccount: <T::Lookie as StaticLookup>::Source, APNAccount: <T::Lookie as StaticLookup>::Source, amount: BalanceOf<T>) -> DispatchResult {
+			let caller = ensure_signed(origin)?;
+
+			let target_APNAccount = T::Lookie::lookup(APNAccount)?;
+			let target_BasinAccount = T::Lookie::lookup(BasinAccount)?;
+
+			T::Currency::transfer(&target_BasinAccount, &target_APNAccount,
+				amount, KeepAlive);
 
 			Ok(())
 		}

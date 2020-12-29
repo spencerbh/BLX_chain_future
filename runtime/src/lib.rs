@@ -360,6 +360,7 @@ impl loose_lookup::Trait for Runtime {
 	// type Event = Event;
 	type Lookie = Claimer;
 	type AccountIndex = AccountIndex;
+	type Currency = Balances;
 }
 // impl pallet_proxy::Trait for Runtime {
 // 	type Event = Event;
